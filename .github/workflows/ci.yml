@@ -1,0 +1,56 @@
+name: CI/CD - Frontend (Angular)
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  repository_dispatch:
+    types: ["sync-ci"]
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/**
+
+  trigger-backend:
+    needs: build
+    runs-on: ubuntu-latest
+
+    # مهم: نعمل trigger للريبو التاني فقط في حالة push على main
+    # عشان ما يحصلش loop لما الـ backend يبعت repository_dispatch
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Trigger Backend workflow
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          repository: ASV47/Backend
+          event-type: sync-ci
+          client-payload: >
+            {"source":"frontend","sha":"${{ github.sha }}","ref":"${{ github.ref }}"}
