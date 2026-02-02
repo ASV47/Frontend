@@ -1,58 +1,58 @@
-name: CI/CD - Frontend (Angular)
+name: CI/CD - Backend (.NET)
 
 on:
   push:
     branches: ["main"]
   pull_request:
-  workflow_dispatch:
   repository_dispatch:
     types: ["sync-ci"]
 
 concurrency:
-  group: frontend-${{ github.event_name }}-${{ github.ref || github.event.client_payload.ref || github.run_id }}
+  group: backend-${{ github.ref }}
   cancel-in-progress: true
-
-permissions:
-  contents: read
-
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: package-lock.json
+          dotnet-version: "8.0.x"
 
-      - name: Install
-        run: npm ci
+      - name: Restore
+        run: dotnet restore
 
       - name: Build
-        run: npm run build
+        run: dotnet build -c Release --no-restore
 
-      - name: Upload dist artifact
+      - name: Test
+        run: dotnet test -c Release --no-build --verbosity normal
+
+      - name: Publish
+        run: dotnet publish -c Release -o publish
+
+      - name: Upload publish artifact
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-dist
-          path: dist/**
+          name: backend-publish
+          path: publish/**
 
-  trigger-backend:
+  trigger-frontend:
     needs: build
     runs-on: ubuntu-latest
-    # Trigger للريبو التاني فقط لو push على main (عشان ما يحصلش loop)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
     steps:
-      - name: Trigger Backend workflow
+      - name: Trigger Frontend workflow
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.CROSS_REPO_TOKEN }}
-          repository: ASV47/Backend
+          repository: ASV47/Frontend
           event-type: sync-ci
           client-payload: >
-            {"source":"frontend","sha":"${{ github.sha }}","ref":"${{ github.ref }}"}
+            {"source":"backend","sha":"${{ github.sha }}","ref":"${{ github.ref }}"}
