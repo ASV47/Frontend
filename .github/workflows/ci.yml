@@ -9,7 +9,7 @@ on:
     types: ["sync-ci"]
 
 concurrency:
-  group: frontend-${{ github.event_name }}-${{ github.ref || github.event.client_payload.ref || github.run_id }}
+  group: frontend-${{ github.ref || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -23,28 +23,56 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      # نضمن إن build.log موجود حتى لو الـ install فشل
+      - name: Init build log
+        shell: bash
+        run: |
+          : > build.log
+          echo "== CI START ==" >> build.log
+          date >> build.log
+
+      # لو package-lock.json موجود نستخدم cache
+      - name: Setup Node (with cache when lockfile exists)
+        if: ${{ hashFiles('package-lock.json') != '' || hashFiles('npm-shrinkwrap.json') != '' }}
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            npm-shrinkwrap.json
+
+      # لو مفيش lockfile، نعمل setup-node بدون cache عشان ما يطلعش warning
+      - name: Setup Node (no cache - no lockfile)
+        if: ${{ hashFiles('package-lock.json') == '' && hashFiles('npm-shrinkwrap.json') == '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Debug - versions & files
         shell: bash
         run: |
-          echo "Node:" && node -v
-          echo "NPM:" && npm -v
-          echo "PWD:" && pwd
-          echo "Files:" && ls -la
-          echo "Lock files:"
-          ls -la package-lock.json yarn.lock pnpm-lock.yaml 2>/dev/null || true
+          {
+            echo "Node: $(node -v)"
+            echo "NPM : $(npm -v)"
+            echo "PWD : $(pwd)"
+            echo "Files:"
+            ls -la
+            echo "Lock files:"
+            ls -la package-lock.json npm-shrinkwrap.json 2>/dev/null || true
+          } | tee -a build.log
 
-      - name: Install (requires package-lock.json)
-        run: npm ci --no-audit --no-fund
-
-      - name: Debug - Angular version
-        run: npx ng version
+      - name: Install (ci when lockfile exists, otherwise install)
+        shell: bash
+        run: |
+          set -o pipefail
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            echo "Using npm ci (lockfile found)" | tee -a build.log
+            npm ci --no-audit --no-fund 2>&1 | tee -a build.log
+          else
+            echo "Using npm install (NO lockfile found)" | tee -a build.log
+            npm install --no-audit --no-fund 2>&1 | tee -a build.log
+          fi
 
       - name: Build (capture log)
         env:
@@ -52,9 +80,13 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          npx ng build --configuration production --verbose 2>&1 | tee build.log
+          echo "== ng version ==" | tee -a build.log
+          npx ng version 2>&1 | tee -a build.log
 
-      - name: Upload build log (even on failure)
+          echo "== ng build ==" | tee -a build.log
+          npx ng build --configuration production --verbose 2>&1 | tee -a build.log
+
+      - name: Upload build log (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -71,8 +103,6 @@ jobs:
   trigger-backend:
     needs: build
     runs-on: ubuntu-latest
-
-    # Trigger backend only when this workflow ran due to a direct push to main (avoid loop)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
