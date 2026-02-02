@@ -45,17 +45,17 @@ jobs:
           name: backend-publish
           path: publish/**
 
-  trigger-frontend:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Trigger Frontend workflow
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.CROSS_REPO_TOKEN }}
-          repository: ASV47/Frontend
-          event-type: sync-ci
-          client-payload: >
-            {"source":"backend","sha":"${{ github.sha }}","ref":"${{ github.ref }}"}
+        trigger-frontend:
+        needs: build
+        runs-on: ubuntu-latest
+         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+ 
+        steps:
+         - name: Trigger Frontend workflow
+           uses: peter-evans/repository-dispatch@v3
+            with:
+            token: ${{ secrets.CROSS_REPO_TOKEN }}
+           repository: ASV47/Frontend
+           event-type: sync-ci
+           client-payload: >
+                 {"source":"backend","sha":"${{ github.sha }}","ref":"${{ github.ref }}"}
