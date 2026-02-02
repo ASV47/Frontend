@@ -4,17 +4,20 @@ on:
   push:
     branches: ["main"]
   pull_request:
+  workflow_dispatch:
   repository_dispatch:
     types: ["sync-ci"]
 
 concurrency:
-  group: frontend-${{ github.ref }}
+  group: frontend-${{ github.event_name }}-${{ github.ref || github.event.client_payload.ref || github.run_id }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,6 +27,7 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
+          cache-dependency-path: package-lock.json
 
       - name: Install
         run: npm ci
@@ -40,11 +44,8 @@ jobs:
   trigger-backend:
     needs: build
     runs-on: ubuntu-latest
-
-    # مهم: نعمل trigger للريبو التاني فقط في حالة push على main
-    # عشان ما يحصلش loop لما الـ backend يبعت repository_dispatch
+    # Trigger للريبو التاني فقط لو push على main (عشان ما يحصلش loop)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
     steps:
       - name: Trigger Backend workflow
         uses: peter-evans/repository-dispatch@v3
