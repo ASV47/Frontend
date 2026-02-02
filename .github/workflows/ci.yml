@@ -12,18 +12,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+      - name: Build (capture log)
+        env:
+          NODE_OPTIONS: --max_old_space_size=4096
+        shell: bash
+        run: |
+          set -o pipefail
+          npx ng version
+          npx ng build --configuration production --verbose 2>&1 | tee build.log
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - name: Upload build log (even on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          dotnet-version: "8.0.x"
-
+          name: frontend-build-log
+          path: build.log
       - name: Restore
         run: dotnet restore
 
