@@ -9,7 +9,7 @@ on:
     types: ["sync-ci"]
 
 concurrency:
-  group: frontend-${{ github.ref || github.run_id }}
+  group: frontend-${{ github.event_name }}-${{ github.ref || github.event.client_payload.ref || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -23,7 +23,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # نضمن إن build.log موجود حتى لو الـ install فشل
+      # Create log file early so it's always present
       - name: Init build log
         shell: bash
         run: |
@@ -31,8 +31,8 @@ jobs:
           echo "== CI START ==" >> build.log
           date >> build.log
 
-      # لو package-lock.json موجود نستخدم cache
-      - name: Setup Node (with cache when lockfile exists)
+      # If a valid lockfile exists, enable npm cache (fast)
+      - name: Setup Node (with cache when lockfile is valid)
         if: ${{ hashFiles('package-lock.json') != '' || hashFiles('npm-shrinkwrap.json') != '' }}
         uses: actions/setup-node@v4
         with:
@@ -42,7 +42,7 @@ jobs:
             package-lock.json
             npm-shrinkwrap.json
 
-      # لو مفيش lockfile، نعمل setup-node بدون cache عشان ما يطلعش warning
+      # If no lockfile, setup Node without cache (avoid warnings)
       - name: Setup Node (no cache - no lockfile)
         if: ${{ hashFiles('package-lock.json') == '' && hashFiles('npm-shrinkwrap.json') == '' }}
         uses: actions/setup-node@v4
@@ -60,17 +60,22 @@ jobs:
             ls -la
             echo "Lock files:"
             ls -la package-lock.json npm-shrinkwrap.json 2>/dev/null || true
+            if [ -f package-lock.json ]; then
+              echo "package-lock.json size: $(wc -c < package-lock.json) bytes"
+            fi
           } | tee -a build.log
 
-      - name: Install (ci when lockfile exists, otherwise install)
+      - name: Install (ci only if lockfile is VALID, otherwise install)
         shell: bash
         run: |
           set -o pipefail
-          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-            echo "Using npm ci (lockfile found)" | tee -a build.log
+
+          # -s means file exists AND size > 0
+          if [ -s package-lock.json ] || [ -s npm-shrinkwrap.json ]; then
+            echo "Using npm ci (valid lockfile found)" | tee -a build.log
             npm ci --no-audit --no-fund 2>&1 | tee -a build.log
           else
-            echo "Using npm install (NO lockfile found)" | tee -a build.log
+            echo "Using npm install (no valid lockfile)" | tee -a build.log
             npm install --no-audit --no-fund 2>&1 | tee -a build.log
           fi
 
@@ -103,6 +108,8 @@ jobs:
   trigger-backend:
     needs: build
     runs-on: ubuntu-latest
+
+    # Trigger backend ONLY on direct push to main (avoid infinite loop on repository_dispatch)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
