@@ -1,33 +1,31 @@
-name: Deploy Frontend to GitHub Pages
+name: CI - Frontend (Angular) + Cross Trigger Backend
 
 on:
   push:
-    branches: ["main"]
+  pull_request:
   workflow_dispatch:
+  repository_dispatch:
+    types: ["sync-ci"]
+
+concurrency:
+  group: frontend-${{ github.event_name }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install (ci if valid lockfile else install)
+      - name: Install
         shell: bash
         run: |
           set -e
@@ -37,39 +35,29 @@ jobs:
             npm install --no-audit --no-fund
           fi
 
-      - name: Build for GitHub Pages
-        shell: bash
-        run: |
-          set -e
-          # base-href لازم يكون اسم الريبو
-          npx ng build --configuration production --base-href "/Frontend/"
+      - name: Build
+        env:
+          NODE_OPTIONS: --max_old_space_size=4096
+        run: npx ng build --configuration production
 
-      - name: Detect site directory (where index.html is)
-        id: site
-        shell: bash
-        run: |
-          set -e
-          INDEX_PATH="$(find dist -name index.html | head -n 1)"
-          if [ -z "$INDEX_PATH" ]; then
-            echo "index.html not found under dist/"
-            exit 1
-          fi
-          SITE_DIR="$(dirname "$INDEX_PATH")"
-          echo "site_dir=$SITE_DIR" >> $GITHUB_OUTPUT
-          echo "Using site dir: $SITE_DIR"
+  dispatch-backend:
+    needs: build
+    runs-on: ubuntu-latest
 
-      # Angular SPA على Pages محتاجة 404.html = index.html علشان الراوتنج
-      - name: SPA fallback (404.html)
-        shell: bash
-        run: |
-          cp "${{ steps.site.outputs.site_dir }}/index.html" "${{ steps.site.outputs.site_dir }}/404.html"
+    # ابعت للباك لو:
+    # - push
+    # - أو pull_request بس بشرط مش fork
+    # ومش نبعت لو ده repository_dispatch (عشان نمنع loop)
+    if: >
+      (github.event_name == 'push') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+    steps:
+      - name: Trigger Backend CI (repository_dispatch)
+        uses: peter-evans/repository-dispatch@v3
         with:
-          path: ${{ steps.site.outputs.site_dir }}
-        # action رسمي لرفع artifact للـ Pages :contentReference[oaicite:2]{index=2}
-
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
-        # action رسمي للـ deploy :contentReference[oaicite:3]{index=3}
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          repository: ASV47/Backend
+          event-type: sync-ci
+          client-payload: >
+            {"source":"frontend","event":"${{ github.event_name }}","sha":"${{ github.sha }}","ref":"${{ github.ref }}"}
