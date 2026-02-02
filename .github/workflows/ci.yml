@@ -1,123 +1,75 @@
-name: CI/CD - Frontend (Angular)
+name: Deploy Frontend to GitHub Pages
 
 on:
   push:
     branches: ["main"]
-  pull_request:
   workflow_dispatch:
-  repository_dispatch:
-    types: ["sync-ci"]
-
-concurrency:
-  group: frontend-${{ github.event_name }}-${{ github.ref || github.event.client_payload.ref || github.run_id }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Create log file early so it's always present
-      - name: Init build log
-        shell: bash
-        run: |
-          : > build.log
-          echo "== CI START ==" >> build.log
-          date >> build.log
-
-      # If a valid lockfile exists, enable npm cache (fast)
-      - name: Setup Node (with cache when lockfile is valid)
-        if: ${{ hashFiles('package-lock.json') != '' || hashFiles('npm-shrinkwrap.json') != '' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: |
-            package-lock.json
-            npm-shrinkwrap.json
-
-      # If no lockfile, setup Node without cache (avoid warnings)
-      - name: Setup Node (no cache - no lockfile)
-        if: ${{ hashFiles('package-lock.json') == '' && hashFiles('npm-shrinkwrap.json') == '' }}
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Debug - versions & files
+      - name: Install (ci if valid lockfile else install)
         shell: bash
         run: |
-          {
-            echo "Node: $(node -v)"
-            echo "NPM : $(npm -v)"
-            echo "PWD : $(pwd)"
-            echo "Files:"
-            ls -la
-            echo "Lock files:"
-            ls -la package-lock.json npm-shrinkwrap.json 2>/dev/null || true
-            if [ -f package-lock.json ]; then
-              echo "package-lock.json size: $(wc -c < package-lock.json) bytes"
-            fi
-          } | tee -a build.log
-
-      - name: Install (ci only if lockfile is VALID, otherwise install)
-        shell: bash
-        run: |
-          set -o pipefail
-
-          # -s means file exists AND size > 0
+          set -e
           if [ -s package-lock.json ] || [ -s npm-shrinkwrap.json ]; then
-            echo "Using npm ci (valid lockfile found)" | tee -a build.log
-            npm ci --no-audit --no-fund 2>&1 | tee -a build.log
+            npm ci --no-audit --no-fund
           else
-            echo "Using npm install (no valid lockfile)" | tee -a build.log
-            npm install --no-audit --no-fund 2>&1 | tee -a build.log
+            npm install --no-audit --no-fund
           fi
 
-      - name: Build (capture log)
-        env:
-          NODE_OPTIONS: --max_old_space_size=4096
+      - name: Build for GitHub Pages
         shell: bash
         run: |
-          set -o pipefail
-          echo "== ng version ==" | tee -a build.log
-          npx ng version 2>&1 | tee -a build.log
+          set -e
+          # base-href لازم يكون اسم الريبو
+          npx ng build --configuration production --base-href "/Frontend/"
 
-          echo "== ng build ==" | tee -a build.log
-          npx ng build --configuration production --verbose 2>&1 | tee -a build.log
+      - name: Detect site directory (where index.html is)
+        id: site
+        shell: bash
+        run: |
+          set -e
+          INDEX_PATH="$(find dist -name index.html | head -n 1)"
+          if [ -z "$INDEX_PATH" ]; then
+            echo "index.html not found under dist/"
+            exit 1
+          fi
+          SITE_DIR="$(dirname "$INDEX_PATH")"
+          echo "site_dir=$SITE_DIR" >> $GITHUB_OUTPUT
+          echo "Using site dir: $SITE_DIR"
 
-      - name: Upload build log (always)
-        if: always()
-        uses: actions/upload-artifact@v4
+      # Angular SPA على Pages محتاجة 404.html = index.html علشان الراوتنج
+      - name: SPA fallback (404.html)
+        shell: bash
+        run: |
+          cp "${{ steps.site.outputs.site_dir }}/index.html" "${{ steps.site.outputs.site_dir }}/404.html"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: frontend-build-log
-          path: build.log
+          path: ${{ steps.site.outputs.site_dir }}
+        # action رسمي لرفع artifact للـ Pages :contentReference[oaicite:2]{index=2}
 
-      - name: Upload dist artifact (on success)
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-dist
-          path: dist/**
-
-  trigger-backend:
-    needs: build
-    runs-on: ubuntu-latest
-
-    # Trigger backend ONLY on direct push to main (avoid infinite loop on repository_dispatch)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Trigger Backend workflow
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.CROSS_REPO_TOKEN }}
-          repository: ASV47/Backend
-          event-type: sync-ci
-          client-payload: >
-            {"source":"frontend","sha":"${{ github.sha }}","ref":"${{ github.ref }}"}
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
+        # action رسمي للـ deploy :contentReference[oaicite:3]{index=3}
